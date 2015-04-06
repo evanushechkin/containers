@@ -41,7 +41,7 @@ Ohai.plugin(:Containers) do
 
     #Set our command for lxc container
     lxc_command = "lxc-ls"
-    docker_command = "docker ps -a"
+    docker_command = "docker ps -a | awk {'print $1'}"
 
     #Gather our containers
     lxc_containers = shell_out(lxc_command).stdout if containers[:lxc][:host]
@@ -61,13 +61,15 @@ Ohai.plugin(:Containers) do
 
 
     #Loop through our Docker containers and collect data on them
-    docker_containers.split(' ').each do |container|
+    docker_containers.split("\n").each do |container|
 
-      #Create a new mash if not there
-      containers[:docker][:container]["#{container}".to_sym] = Mash.new unless containers[:docker][:container]["#{container}".to_sym]
+      unless container == 'CONTAINER'
+        #Create a new mash if not there
+        containers[:docker][:container]["#{container}".to_sym] = Mash.new unless containers[:docker][:container]["#{container}".to_sym]
 
-      #Populate our container information
-      populate_docker_container(container)
+        #Populate our container information
+        populate_docker_container(container)
+      end
 
     end if containers[:docker][:host]
 
@@ -95,6 +97,57 @@ Ohai.plugin(:Containers) do
   #Go through each docker container and populate the data
   def populate_docker_container(container)
 
+    #We will grab our directories under /var/lib/docker
+    ::Dir.glob('/var/lib/docker/containers/*/').each do |directory|
+
+      #Set our base path to parse config json
+      @config_file = "#{directory}config.json" if directory.to_s.include?(container)
+
+    end
+
+    #Parse the single line JSON configuration
+    container_config = JSON.parse(File.readlines(@config_file).first.chomp)
+
+    #Let's populate
+    container_config.each do |k,v|
+
+      if v.to_s.include?('{') && v.to_s.include?('}')
+
+        #If we have a sub k/v then lets traverse
+        populate_sub_mash(k,v,containers[:docker][:container]["#{container}".to_sym])
+
+      else
+
+        containers[:docker][:container]["#{container}".to_sym]["#{k}".to_sym] = v
+
+      end
+
+    end
+
+  end
+
+  #This Will Populate Sub Mashes
+  def populate_sub_mash(k,v,base)
+
+    #Create from base
+    base["#{k}".to_sym] = Mash.new unless base["#{k}".to_sym]
+
+    #Loop through those values
+    v.each do  |sub_k,sub_v|
+
+      #If we have another level, just keep calling until we reach the bottom
+      if sub_v.to_s.include?('{') && sub_v.to_s.include?('}')
+
+        populate_sub_mash(k,v,base["#{k}".to_sym])
+
+      else
+
+        #Or, we just finish up
+        base["#{k}".to_sym]["#{sub_k}".to_sym] = sub_v
+
+      end
+
+    end
 
   end
 
